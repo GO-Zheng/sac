@@ -95,16 +95,15 @@ flowchart TD
 
 ## 四、 测试分层金字塔与质量门禁 (Testing Pyramid)
 
-测试契约是代码生成的唯一约束. 测试体系划分为三个清晰层次:
+测试契约是代码生成的唯一约束. 测试体系自顶向下划分为三个清晰层次:
 
-```text
-       / \
-      / L3 \       黑盒端到端与混沌故障注入集成测试 (Blackbox & Chaos Integration)
-     /------\      (对外 API 契约、并发无锁、突发断电残损物理自愈截断)
-    /   L2   \     组件级双向往返测试 (Component Roundtrip & Boundary)
-   /----------\    (子系统写入与回放 100% 对齐、单组件边界容错)
-  /     L1     \   数据结构与二进制编解码单元测试 (Unit & Codec Defense)
- /--------------\  (固定头部编解码、CRC32 校验、边界溢出防御)
+```mermaid
+flowchart TD
+    L3["L3 黑盒端到端与混沌故障注入集成测试: 对外 API 契约, 并发无锁, 断电自愈与越界损坏拦截"]
+    L2["L2 组件级双向往返测试: 子系统写入与读取 100% 对齐, 单组件边界容错"]
+    L1["L1 数据结构与二进制编解码单元测试: 固定头部编解码, 双哈希位图, CRC32 与溢出防御"]
+
+    L3 --> L2 --> L1
 ```
 
 1. **L1 单元测试**: 纯内存运行, 无文件 I/O 依赖, 极速验证纯数据结构与编解码边界.
@@ -117,13 +116,15 @@ flowchart TD
 
 ```shell
 docs/testing/
-├── invariants-matrix.md          # [Hub] 核心不变式总览矩阵 (精简 4 列索引)
+├── specs/                        # [Spoke] 领域与管道四段式明细规约
+│   ├── chaos-sstable-faults.md   # SSTable 故障注入明细
+│   ├── chaos-wal-faults.md       # WAL 故障注入明细
+│   ├── invariants-flush.md       # 落盘管道不变式明细
+│   ├── invariants-memtable.md    # 内存表不变式明细
+│   ├── invariants-sstable.md     # SSTable 与过滤器不变式明细
+│   └── invariants-wal.md         # 预写日志不变式明细
 ├── chaos-matrix.md               # [Hub] 混沌故障注入总览矩阵 (精简 4 列索引)
-└── specs/                        # [Spoke] 领域与管道四段式明细规约
-    ├── invariants-memtable.md    # 内存表不变式明细
-    ├── invariants-wal.md         # 预写日志不变式明细
-    ├── invariants-flush.md       # 落盘管道不变式明细
-    └── chaos-wal-faults.md       # WAL 故障注入明细
+└── invariants-matrix.md          # [Hub] 核心不变式总览矩阵 (精简 4 列索引)
 ```
 
 1. **中枢总览表 (Hub Matrix)**:
@@ -157,21 +158,28 @@ flowchart TD
 ```
 
 1. **第一阶段: 规约设计先行 (Spec-First Design)**:
-   - 在架构讨论阶段, 直接新建或演进项目内的 L0-L3 文档 (`CONTEXT.md`, `docs/adr/`, `docs/specs/`, `docs/diagrams/`, `docs/testing/`), 正式分配 `TC-INV-xx` / `TC-CHAOS-xx` 编号, 避免维护游离于项目之外的重复临时设计稿.
+   - 在架构讨论 (`brainstorming`) 阶段, 直接新建或演进项目内的 L0-L3 活文档 (`CONTEXT.md`, `docs/adr/`, `docs/specs/`, `docs/diagrams/`, `docs/testing/`), 正式分配 `TC-INV-xx` / `TC-CHAOS-xx` 编号.
+   - **单一规约源纪律**: 直接以项目的 L0-L3 活文档替代传统的临时单文件设计稿 (`superpowers/specs/`), 彻底消除双份 Spec 的重复维护.
 2. **第二阶段: 依规约编排计划 (Plan from Contracts)**:
-   - 基于已落地的 L1 规约与 L3 测试矩阵拆解实施计划, 每个实施步骤直接锚定对应的 Spec 章节与测试编号.
+   - 基于已落地的 L1 规约与 L3 测试矩阵生成时间轴施工计划 (`superpowers/plans/`), 每个实施步骤直接锚定对应的 Spec 章节与测试编号.
 3. **第三阶段: 代码衍生与验证 (L4 Derivation & TDD)**:
    - 按计划执行 TDD 编码与审查; 生成的 L4 代码 (`src/`, `tests/`) 在诞生时即挂载真实存在的规约反链, 并以此实战检验 L1-L3 文档是否清晰完备.
 4. **第四阶段: 实践反哺与双轨进化 (Practical Feedback & Meta-Evolution)**:
-   - 将编码与 Code Review 中暴露出的实战边界 (如异常残留文件防御, 历史孤儿资源回收等) 反哺回项目 L0-L3 文档 (增补正式测试编号与规约条款);
-   - 同时将通用的文档组织与工程治理经验提炼沉淀回 `sac` 元方法论仓库.
+   - **提交前强制反哺门禁**: 严禁在 Step 3 代码与审查通过后直接跳去执行 `git commit`. 先验规约必然存在物理与运行时认知盲区, 必须在提交前对照实战代码执行以下 **四项反哺巡检清单 (Pre-Commit Feedback Checklist)**:
+     1. **物理与算术边界校准**: 将编码与 Code Review 中暴露出的底层防御边界 (如块句柄上限需扣除尾部 `Footer` 尺寸, 解码容量上限门禁, 32 位 wrapping 模算术对称性等) 同步回 `docs/specs/` 与 `docs/adr/`;
+     2. **测试规约去内部耦合**: 若测试落地时发现先验规约误写了内部状态细节 (如猜测硬编码了动态轮转后的文件序号), 立即修正 `docs/testing/specs/`, 保持黑盒语义纯粹;
+     3. **存量活文档与图表跟进**: 检查前序 Phase 的关联活文档 (`docs/specs/`) 与时序图 (`docs/diagrams/`) 是否因新增组件而滞后, 及时就地演进 (注意: 历史已采纳的 `docs/adr/` 保持冻结, 严禁逆向篡改);
+     4. **源码反链与元方法论沉淀**: 核对所有受影响源码文件头部的 `@spec` / `@adr` / `@test` 反链完整性, 并将通用的文档组织与工程治理洞察提炼沉淀回 `sac` 元方法论仓库.
 
-### 2. 规约持久化与决策替代 (Supersede)
+### 2. 活规约演进 vs ADR 不可变时间因果律
 
-1. **按领域能力持久命名规约**:
-   - 严禁按过程里程碑命名 Spec (如使用 `wal-storage.md` 而非 `phase2-wal.md`). 系统演化时, 在对应领域 Spec 上就地增量修改, 保持“活文档”属性.
-2. **ADR 变更链条**:
-   - 架构决策一旦被采纳则永久冻结; 当后续阶段推翻或升级前序决策时, 在旧 ADR 标记 `status: superseded`, `superseded_by: adr-xxxx`, 并新建 `supersedes: adr-yyyy` 的新 ADR.
+1. **活规约 (`docs/specs/`) 就地演进与全集聚合**:
+   - 严禁按过程里程碑命名 Spec (如使用 `sstable-format.md` 而非 `phase3-sstable.md`).
+   - 系统演化时, 在对应领域 Spec 上就地增量修改, 并在其 Frontmatter `related.adr` 中聚合挂载所有生效的相关 ADR (如同时关联 `0004` 与 `0005`), 保持空间轴“活文档”属性.
+2. **架构决策 (`docs/adr/`) 不可变性与单向时间因果律**:
+   - ADR 是时间轴上的**不可变历史决策快照 (Append-Only)**, 一旦采纳 (`status: accepted`) 则正文永久冻结, 严禁让旧编号 ADR 逆向依赖或引用新编号 ADR (如严禁在 `0004` 中添加对 `0005` 的依赖或篡改当时记录的代价).
+   - **模式 A — 增量扩展 / 细化 (Extends / Refines)**: 当新 ADR (如 `0005`) 是在旧 ADR (`0004`) 基础上的增量扩展而非推翻时, 旧 ADR (`0004`) 保持原状不动; 由新 ADR (`0005`) 在 `related.adr` 中**单向回溯**指向旧 ADR (`0004`), 符合时间因果有向无环图 (DAG).
+   - **模式 B — 推翻与替代 (Supersedes)**: 仅当旧 ADR 的核心决策被后续阶段彻底废弃推翻时, 才允许修改旧 ADR 的 Frontmatter 状态为 `status: superseded` 并注明 `superseded_by: adr-xxxx` (正文仍保持历史原貌), 同时在新 ADR 声明 `supersedes: adr-yyyy`.
 
 ---
 
